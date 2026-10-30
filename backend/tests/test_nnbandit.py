@@ -7,7 +7,8 @@ from app.config import Settings
 from app.data import prepare_dataset
 from app.nnbandit.bandit import ALGORITHMS, make_bandit
 from app.nnbandit.features import build_sequences
-from app.nnbandit.models import MODEL_IDS, build_model
+from app.nnbandit.foundation import forecast_timesfm
+from app.nnbandit.models import TRAINABLE, build_model
 from app.nnbandit.portfolio import sharpe_and_mdd, target_weights, window_reward
 from app.nnbandit.training import train_one
 from app.sim import make_bundle
@@ -45,7 +46,7 @@ def test_no_lookahead_in_windows(bundle):
     assert not np.array_equal(d0.X[t + 2], d1.X[t + 2])      # negative control
 
 
-@pytest.mark.parametrize("model_id", MODEL_IDS)
+@pytest.mark.parametrize("model_id", TRAINABLE)
 def test_models_forward_and_backward(model_id):
     m = build_model(model_id, n_features=11, lookback=20)
     x = torch.randn(8, 20, 11, requires_grad=True)
@@ -114,3 +115,24 @@ def test_successive_halving_respects_budget():
     for _ in range(40):
         bd.update(bd.select(), 0.5)
     assert bd.n.sum() == 40
+
+
+def test_timesfm_wrapper_uses_only_past_data(bundle):
+    """With a stub in place of the pretrained model: each context must end at t - exec_delay, and the
+    forecast for bar t + 1 is horizon step exec_delay + 1."""
+    d = build_sequences(bundle)
+    seen = []
+
+    def stub(xs):
+        seen.extend(len(x) for x in xs)
+        # echo the last context value at every horizon step, so the mapping is checkable
+        return np.stack([np.array([x[-1], x[-1] + 1.0]) for x in xs])
+
+    out = forecast_timesfm(bundle.z, d, context=64, forecast_fn=stub)
+    ts = np.flatnonzero(d.valid)
+    delay = bundle.pcfg.exec_delay
+    assert max(seen) <= 64
+    t = ts[50]
+    expected = bundle.z[t - delay, :] + (1.0 if delay == 1 else 0.0)
+    assert np.allclose(out["pred"][t], expected)
+    assert np.isnan(out["pred"][~d.valid]).all()

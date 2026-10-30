@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-COLORS = {"rnn": "#9aa0a6", "lstm": "#1a73e8", "gru": "#188038", "tcn": "#e8710a", "patchtst": "#a142f4"}
+COLORS = {"rnn": "#9aa0a6", "lstm": "#1a73e8", "gru": "#188038", "tcn": "#e8710a", "patchtst": "#a142f4", "timesfm": "#d93025"}
 ALGO_COLORS = {"uniform": "#5f6368", "epsilon_greedy": "#f9ab00", "ucb1": "#1a73e8", "ucb1_tuned": "#12b5cb",
                "thompson": "#d93025", "successive_halving": "#188038"}
 
@@ -77,6 +77,8 @@ def _charts(res: dict, out: Path) -> list[str]:
         ax[0].plot(val[m]["train_loss_curve"], color=COLORS.get(m), label=label[m])
         ax[1].plot(val[m]["val_loss_curve"], color=COLORS.get(m), label=label[m])
         sal = val[m]["lag_saliency"]
+        if all(x is None for x in sal):          # pretrained arm: no gradients through our data
+            continue
         ax[2].plot(np.arange(-len(sal) + 1, 1), sal, color=COLORS.get(m), label=label[m], marker=".")
     ax[0].set(title="Training loss (Huber), mean of seeds", xlabel="epoch")
     ax[1].set(title="Inner-validation loss (early stopping)", xlabel="epoch")
@@ -175,6 +177,10 @@ def write_report(res: dict, out: Path) -> Path:
           "|---|---|---|---|"]
     for m in models:
         r = val["models"][m]
+        if r.get("pretrained"):
+            L.append(f"| {lab[m]} | {r['n_params']:,} (pretrained) | {_num(r['train_seconds_median'], 1)} s "
+                     "inference, once | zero-shot |")
+            continue
         L.append(f"| {lab[m]} | {r['n_params']:,} | {_num(r['train_seconds_median'], 1)} s | "
                  f"{_num(r['epochs_median'], 0)} ({_num(r['best_epoch_median'], 0)}) |")
     L += ["", "### Regime slices (validation, seed-ensemble Sharpe)", ""]

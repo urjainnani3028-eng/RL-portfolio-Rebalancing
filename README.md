@@ -125,7 +125,7 @@ backend/
   app/analysis.py    cost sweep, regimes, risk-return scatter
   app/jobs.py        background job queue with live progress
   app/main.py        FastAPI REST API (+ serves the built frontend)
-  app/nnbandit/      RNN/LSTM/GRU/TCN/PatchTST forecasters, bandit algorithms, study runner, CLI, report
+  app/nnbandit/      RNN/LSTM/GRU/TCN forecasters + pretrained TimesFM, bandit algorithms, study runner, CLI, report
   tests/             pytest: sanity tests, cap projection, cost asymmetry, no-look-ahead
   storage/           (created at runtime) datasets, caches, runs, models
 frontend/            React + Vite + Recharts dashboard
@@ -155,19 +155,34 @@ cd backend
 ../.venv/bin/python -m app.nnbandit.cli --quick         # smoke run (~3 min)
 ../.venv/bin/python -m app.nnbandit.cli --test          # + one-shot evaluation on 2022-present
 ../.venv/bin/python -m app.nnbandit.cli --algorithm ucb1_tuned --budget 60 --max-seeds 10
+../.venv/bin/python -m app.nnbandit.cli --timesfm-version 3.0       # TimesFM 3.0 instead of 2.5
+../.venv/bin/python -m app.nnbandit.cli --models rnn lstm gru tcn patchtst   # offline: PatchTST instead of TimesFM
 ```
+TimesFM's weights (~800 MB for 2.5) download from Hugging Face on the first run and are cached in `~/.cache/huggingface`.
+With no internet, point `--timesfm-checkpoint` at a downloaded copy, or use the PatchTST line above.
 It writes `storage/nnbandit/report/report.md` plus PNG charts, and saves JSON results in `storage/nnbandit/results/`.
 Trained models are cached, so re-runs and other bandit algorithms reuse them. In the web app, the same study runs from
 **Model bandit** (step 7).
 
-### The five arms (same budget: 2 hidden layers × 64 units, dropout 0.1, Adam + L2 weight decay, early stopping)
+### The five arms
+The four trained models share one budget: 2 hidden layers × 64 units, dropout 0.1, Adam + L2 weight decay, early stopping.
+TimesFM is used as Google released it, with no training on our data.
+
 | Arm | Architecture | Source |
 |---|---|---|
 | `rnn` | Elman RNN (tanh) | `torch.nn.RNN` |
 | `lstm` | LSTM: input/forget/output gates + cell state | `torch.nn.LSTM` |
 | `gru` | GRU: update/reset gates | `torch.nn.GRU` |
 | `tcn` | Temporal Convolutional Network: causal dilated residual convolutions | open source: Bai et al. 2018, [locuslab/TCN](https://github.com/locuslab/TCN) |
-| `patchtst` | PatchTST: patching + channel-independent Transformer encoder | open source: Nie et al. ICLR 2023, [yuqinie98/PatchTST](https://github.com/yuqinie98/PatchTST) |
+| `timesfm` | TimesFM: pretrained decoder-only time-series foundation model (200M params), **zero-shot** | open source: Das et al. ICML 2024, [google-research/timesfm](https://github.com/google-research/timesfm) |
+| `patchtst` *(optional)* | PatchTST: patching + channel-independent Transformer encoder | open source: Nie et al. ICLR 2023, [yuqinie98/PatchTST](https://github.com/yuqinie98/PatchTST) |
+
+**How TimesFM is used** (`foundation.py`): for each ETF and decision week *t*, it reads that ETF's standardised weekly returns up
+to *t−1* (up to 256 weeks) and forecasts week *t+1*, so it sees exactly the same information set as the trained models. Settings
+that matter: `infer_is_positive=False`, because returns can be negative and must not be clamped at zero; and it forecasts returns,
+not prices, because a price forecast "wins" on error just by repeating last week's price. The model is deterministic, so a single
+inference pass serves every bandit pull, and its cost in the compute comparison is inference time, not training time. Version 2.5
+weights are Apache-2.0; 3.0 weights are licensed for non-commercial use only, which is fine for coursework.
 
 ### Pipeline
 1. **Features** (`features.py`): for each ETF and decision week *t*, a 20-week window ending at *t−1* holds the standardised return,
@@ -178,7 +193,8 @@ Trained models are cached, so re-runs and other bandit algorithms reuse them. In
 3. **Portfolio** (`portfolio.py`): one rule for every model, `w = softmax(5 · forecast)`, capped at 40% per ETF, with trades skipped
    below a 2% drift. It runs through the same simulator and Indian cost model as the RL agent and the baselines.
 4. **Bandit** (`bandit.py`): uniform, ε-greedy, UCB1, UCB1-Tuned, Thompson sampling (Normal-Gamma), and successive halving.
-   A *pull* trains the next seed of the chosen model (cached) and scores it on a random 26-week validation window.
+   A *pull* trains the next seed of the chosen model (cached) and scores it on a random 26-week validation window
+   (for TimesFM, it re-scores its single forecast on a new window).
    **Reward** = 0.5·Sharpe + 0.3·directional accuracy + 0.2·drawdown, each mapped to [0, 1]. Sharpe and drawdown are scored
    relative to equal-weight quarterly on the *same* window, so every arm faces the same market and window noise cancels out.
 5. **Evaluation** (`experiment.py`): (a) live bandit run → its pick; (b) every model × every seed × every window → the true best arm;
@@ -192,6 +208,8 @@ Trained models are cached, so re-runs and other bandit algorithms reuse them. In
 * **Why** comes from the diagnostics in the report. The lag-saliency chart shows how far back each model actually looks (a vanilla RNN's
   gradient decays with lag; LSTM/GRU gating and TCN dilations keep older weeks in play). Turnover shows how stable each model's
   forecasts are, which matters because costs are charged weekly. Train-time and parameter counts give the compute side.
+* **Pretrained vs trained from scratch:** TimesFM vs the other four tests whether broad pretraining beats a small model fit to these
+  ETFs. TimesFM forecasts each ETF on its own, so it can't use the cross-asset volatility/correlation features the others get.
 * With ~400 weekly training samples per ETF the signal is weak. Expect directional accuracy near 50-55% and best epochs early. A
   model that "wins" by a tiny gap is not meaningfully better, and the report prints the gap and the DM p-values so you can say so.
 
@@ -200,5 +218,5 @@ Markowitz (1952) · Jiang, Xu & Liang (2017) EIIE, arXiv:1706.10059 · Lim, Cao 
 Wang & Zhou (2020), Math. Finance · Wang et al. (2021) DeepTrader, AAAI · López de Prado (2016) HRP ·
 Bailey & López de Prado, The Deflated Sharpe Ratio · Sun et al. (2021) survey, arXiv:2109.13851 ·
 Hochreiter & Schmidhuber (1997) LSTM · Cho et al. (2014) GRU · Bai, Kolter & Koltun (2018) TCN, arXiv:1803.01271 ·
-Nie et al. (2023) PatchTST, ICLR · Auer et al. (2002) UCB1, Mach. Learn. 47 · Agrawal & Goyal (2012) Thompson sampling ·
+Nie et al. (2023) PatchTST, ICLR · Das et al. (2024) TimesFM, ICML, arXiv:2310.10688 · Auer et al. (2002) UCB1, Mach. Learn. 47 · Agrawal & Goyal (2012) Thompson sampling ·
 Karnin, Koren & Somekh (2013) successive halving, ICML · Diebold & Mariano (1995) forecast-accuracy test.

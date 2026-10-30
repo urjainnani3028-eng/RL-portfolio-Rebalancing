@@ -4,7 +4,7 @@ import { api, num, pct } from '../api'
 import { Alert, Badge, Button, Card, DataTable, Empty, Field, NumInput, Progress, Segmented, Stat, toast } from '../components/ui'
 import { TimeChart } from '../components/charts'
 
-const MODEL_COLOR = { rnn: 'var(--neutral)', lstm: 'var(--s1)', gru: 'var(--s2)', tcn: 'var(--s3)', patchtst: 'var(--s4)' }
+const MODEL_COLOR = { rnn: 'var(--neutral)', lstm: 'var(--s1)', gru: 'var(--s2)', tcn: 'var(--s3)', patchtst: 'var(--s4)', timesfm: 'var(--s5)' }
 const ALGO_COLOR = ['var(--neutral)', 'var(--s5)', 'var(--s1)', 'var(--s6)', 'var(--s3)', 'var(--s2)']
 const med = (row, k) => row.seeds?.[k]?.median
 
@@ -59,7 +59,7 @@ export default function Bandit({ overview, refresh }) {
       <div className="page-head">
         <div>
           <h1>Model bandit</h1>
-          <p>RNN, LSTM, GRU and two open-source architectures (TCN, PatchTST) forecast next-week ETF returns. A multi-armed bandit decides which model gets more training and testing, and replays show whether it finds the best model faster than testing every model equally.</p>
+          <p>RNN, LSTM, GRU and two open-source models (TCN and Google's pretrained TimesFM, used zero-shot) forecast next-week ETF returns. A multi-armed bandit decides which model gets more training and testing, and replays show whether it finds the best model faster than testing every model equally.</p>
         </div>
       </div>
       {!overview?.dataset && <Alert tone="warn">Prepare a dataset first (Data page).</Alert>}

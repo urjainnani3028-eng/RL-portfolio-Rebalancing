@@ -4,7 +4,8 @@
     python -m app.nnbandit.cli                       # full study on validation (test stays locked)
     python -m app.nnbandit.cli --test                # ... and the one-shot test evaluation
     python -m app.nnbandit.cli --quick               # small smoke run (few seeds / epochs)
-    python -m app.nnbandit.cli --source synthetic    # offline
+    python -m app.nnbandit.cli --source synthetic    # offline prices
+    python -m app.nnbandit.cli --models rnn lstm gru tcn patchtst   # without TimesFM (no download)
 
 Writes results JSON to storage/nnbandit/results/ and a Markdown report + PNG charts to --out.
 """
@@ -20,14 +21,16 @@ from ..data import prepare_dataset
 from ..sim import make_bundle
 from .bandit import ALGORITHMS
 from .experiment import BanditSettings, run_study
-from .models import MODEL_IDS
+from .models import DEFAULT_MODELS, MODEL_IDS
 from .report import write_report
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="RNN / LSTM / GRU / TCN / PatchTST selection with a multi-armed bandit")
+    ap = argparse.ArgumentParser(description="RNN / LSTM / GRU / TCN / TimesFM selection with a multi-armed bandit")
     ap.add_argument("--algorithm", default="successive_halving", choices=list(ALGORITHMS))
-    ap.add_argument("--models", nargs="+", default=MODEL_IDS, choices=MODEL_IDS)
+    ap.add_argument("--models", nargs="+", default=DEFAULT_MODELS, choices=MODEL_IDS)
+    ap.add_argument("--timesfm-version", default="2.5", choices=["2.5", "3.0"])
+    ap.add_argument("--timesfm-checkpoint", default=None, help="local TimesFM checkpoint (default: Hugging Face)")
     ap.add_argument("--budget", type=int, default=40)
     ap.add_argument("--max-seeds", type=int, default=8)
     ap.add_argument("--window", type=int, default=26)
@@ -52,6 +55,7 @@ def main(argv=None):
     b = make_bundle(ds, s.portfolio)
     cfg = BanditSettings(models=a.models, algorithm=a.algorithm, budget=a.budget, max_seeds=a.max_seeds,
                          window=a.window, replay_runs=a.replay_runs, max_epochs=a.epochs, seed=a.seed,
+                         timesfm_version=a.timesfm_version, timesfm_checkpoint=a.timesfm_checkpoint,
                          evaluate_test=a.test)
     if a.quick:
         cfg = cfg.model_copy(update={"max_seeds": 3, "max_epochs": 15, "budget": 15, "replay_runs": 100})

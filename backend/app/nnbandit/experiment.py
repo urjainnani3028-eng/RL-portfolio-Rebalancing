@@ -32,7 +32,8 @@ from ..metrics import compute_metrics, summarize_seeds
 from ..sim import Bundle
 from .bandit import ALGORITHMS, make_bandit
 from .features import SeqData, build_sequences
-from .models import MODEL_IDS, MODEL_INFO
+from .foundation import check_available, forecast_timesfm
+from .models import DEFAULT_MODELS, MODEL_INFO
 from .portfolio import prediction_metrics, run_forecast_portfolio, sharpe_and_mdd, window_reward
 from .training import train_one
 
@@ -46,7 +47,7 @@ BASELINE_IDS = ("market", "ew_monthly", "ew_quarterly", "min_variance_monthly", 
 
 
 class BanditSettings(BaseModel):
-    models: list[str] = Field(default_factory=lambda: list(MODEL_IDS))
+    models: list[str] = Field(default_factory=lambda: list(DEFAULT_MODELS))
     algorithm: Literal["uniform", "epsilon_greedy", "ucb1", "ucb1_tuned", "thompson", "successive_halving"] = \
         "successive_halving"   # pure best-arm identification: the goal here is to pick a model
     budget: int = 40                   # pulls the live bandit may spend
@@ -68,6 +69,10 @@ class BanditSettings(BaseModel):
     patience: int = 10
     inner_val_bars: int = 52
     # portfolio construction from forecasts
+    # TimesFM (pretrained, zero-shot): weights version, optional local checkpoint, context length
+    timesfm_version: Literal["2.5", "3.0"] = "2.5"
+    timesfm_checkpoint: Optional[str] = None
+    timesfm_context: int = 256
     tilt: float = 5.0
     band: float = 0.02
     seed: int = 0
@@ -127,18 +132,38 @@ class Context:
             self.ref_windows = [sharpe_and_mdd(ref_lr[i:i + cfg.window], b.ppy, b.rf_per_bar)
                                 for i in range(len(ref_lr) - cfg.window + 1)]
 
+    @staticmethod
+    def seeds_for(model_id: str, n: int) -> list[int]:
+        """A pretrained model is deterministic: every 'seed' is the same forecast."""
+        return [0] if MODEL_INFO[model_id].get("pretrained") else list(range(n))
+
+    def key(self, model_id: str, seed: int) -> tuple[str, int]:
+        return (model_id, 0 if MODEL_INFO[model_id].get("pretrained") else seed)
+
     def get(self, model_id: str, seed: int) -> Record:
-        key = (model_id, seed)
+        key = self.key(model_id, seed)
         if key in self.records:
             return self.records[key]
-        stem = CACHE / f"{self.train_key}_{model_id}_s{seed}"
+        seed = key[1]
+        cfg = self.cfg
+        if MODEL_INFO[model_id].get("pretrained"):
+            tag = f"{cfg.timesfm_version}_{cfg.timesfm_context}_{cfg.timesfm_checkpoint or 'hf'}"
+            stem = CACHE / f"{self.train_key}_timesfm_{hashlib.sha1(tag.encode()).hexdigest()[:8]}"
+        else:
+            stem = CACHE / f"{self.train_key}_{model_id}_s{seed}"
         if stem.with_suffix(".json").exists() and stem.with_suffix(".npz").exists():
             info = json.loads(stem.with_suffix(".json").read_text())
             z = np.load(stem.with_suffix(".npz"))
             pred, sal = z["pred"], z["saliency"]
         else:
-            out = train_one(model_id, self.data, self.b.segments["train"], seed, stop=self.stop,
-                            **self.cfg.train_kwargs())
+            if MODEL_INFO[model_id].get("pretrained"):
+                out = forecast_timesfm(self.b.z, self.data, cfg.timesfm_version, cfg.timesfm_checkpoint,
+                                       cfg.timesfm_context)
+                out.update(model=model_id, seed=0, train_loss=[], val_loss=[], epochs=0, best_epoch=0,
+                           pretrained=True, saliency=np.full(self.data.lookback, np.nan))
+            else:
+                out = train_one(model_id, self.data, self.b.segments["train"], seed, stop=self.stop,
+                                **self.cfg.train_kwargs())
             pred, sal = out.pop("pred"), out.pop("saliency")
             info = out
             np.savez_compressed(stem.with_suffix(".npz"), pred=pred, saliency=sal)
@@ -165,7 +190,7 @@ def run_live(ctx: Context, progress: Callable) -> dict:
         k = bandit.select()
         m = cfg.models[k]
         seed = int(pulls[k] % cfg.max_seeds)
-        fresh = (m, seed) not in ctx.records
+        fresh = ctx.key(m, seed) not in ctx.records
         rec = ctx.get(m, seed)
         if fresh:
             train_secs[k] += rec.info["seconds"]
@@ -183,7 +208,7 @@ def run_live(ctx: Context, progress: Callable) -> dict:
         "algorithm": cfg.algorithm, "budget": cfg.budget, "winner": cfg.models[bandit.recommend()],
         "pulls": {m: int(pulls[i]) for i, m in enumerate(cfg.models)},
         "mean_reward": {m: _r(means[i]) if np.isfinite(means[i]) else None for i, m in enumerate(cfg.models)},
-        "trainings": {m: int(min(pulls[i], cfg.max_seeds)) for i, m in enumerate(cfg.models)},
+        "trainings": {m: int(min(pulls[i], len(ctx.seeds_for(m, cfg.max_seeds)))) for i, m in enumerate(cfg.models)},
         "train_seconds": {m: _r(train_secs[i], 2) for i, m in enumerate(cfg.models)},
         "log": log,
     }
@@ -269,7 +294,7 @@ def compare_segment(ctx: Context, segment: str, market_lr: np.ndarray, include_c
     ts = data.decisions(a, bnd)
     rows, ens_err, ens_h = {}, {}, {}
     for m in cfg.models:
-        recs = [ctx.get(m, s) for s in range(cfg.max_seeds)]
+        recs = [ctx.get(m, s) for s in ctx.seeds_for(m, cfg.max_seeds)]
         per_seed = []
         for r in recs:
             h = r.h_val if segment == "val" else run_forecast_portfolio(b, ctx.cost, segment, r.pred, cfg.tilt,
@@ -298,6 +323,7 @@ def compare_segment(ctx: Context, segment: str, market_lr: np.ndarray, include_c
                 "train_loss_curve": _curve_mean([r.info["train_loss"] for r in recs]),
                 "val_loss_curve": _curve_mean([r.info["val_loss"] for r in recs]),
                 "lag_saliency": [_r(x, 4) for x in np.mean([r.saliency for r in recs], 0)],
+                "pretrained": bool(MODEL_INFO[m].get("pretrained")),
             })
         rows[m] = row
     # Diebold-Mariano: best ensemble (by median seed Sharpe) vs each of the others
@@ -347,6 +373,9 @@ def run_study(b: Bundle, cost: CostSettings, cfg: BanditSettings, dataset_meta: 
     unknown = [m for m in cfg.models if m not in MODEL_INFO]
     if unknown:
         raise ValueError(f"Unknown models {unknown}")
+    if any(MODEL_INFO[m].get("pretrained") for m in cfg.models):
+        progress(0.01, f"Loading TimesFM {cfg.timesfm_version}")
+        check_available(cfg.timesfm_version, cfg.timesfm_checkpoint)   # fail fast, before any training
     ctx = Context(b, cost, cfg, stop)
     progress(0.02, "Building sequences")
     log(f"Sequences: {int(ctx.data.valid.sum())} decisions x {ctx.data.n_assets} assets, "
@@ -356,8 +385,9 @@ def run_study(b: Bundle, cost: CostSettings, cfg: BanditSettings, dataset_meta: 
     log(f"Live {cfg.algorithm}: winner {live['winner']}, pulls {live['pulls']}")
     live_trainings = len(ctx.trained_now)
 
-    total = len(cfg.models) * cfg.max_seeds
-    for i, (m, s) in enumerate([(m, s) for m in cfg.models for s in range(cfg.max_seeds)]):
+    pool = [(m, s) for m in cfg.models for s in ctx.seeds_for(m, cfg.max_seeds)]
+    total = len(pool)
+    for i, (m, s) in enumerate(pool):
         if stop():
             raise RuntimeError("Cancelled")
         ctx.get(m, s)
@@ -368,13 +398,15 @@ def run_study(b: Bundle, cost: CostSettings, cfg: BanditSettings, dataset_meta: 
     log(f"True best arm: {replay['true_best']}")
 
     # compute accounting: seconds of training the live bandit triggered vs uniform with the same budget
-    mean_secs = {m: float(np.mean([ctx.get(m, s).info["seconds"] for s in range(cfg.max_seeds)])) for m in cfg.models}
-    per_arm_uniform = min(cfg.max_seeds, math.ceil(cfg.budget / len(cfg.models)))
+    mean_secs = {m: float(np.mean([ctx.get(m, s).info["seconds"] for s in ctx.seeds_for(m, cfg.max_seeds)]))
+                 for m in cfg.models}
+    per_arm = math.ceil(cfg.budget / len(cfg.models))
+    uni = {m: min(per_arm, len(ctx.seeds_for(m, cfg.max_seeds))) for m in cfg.models}
     live["compute"] = {
         "bandit_trainings": int(sum(live["trainings"].values())),
-        "uniform_trainings": per_arm_uniform * len(cfg.models),
+        "uniform_trainings": int(sum(uni.values())),
         "bandit_train_seconds_est": _r(sum(live["trainings"][m] * mean_secs[m] for m in cfg.models), 1),
-        "uniform_train_seconds_est": _r(per_arm_uniform * sum(mean_secs.values()), 1),
+        "uniform_train_seconds_est": _r(sum(uni[m] * mean_secs[m] for m in cfg.models), 1),
         "exhaustive_trainings": total,
         "trained_in_this_run": live_trainings,
     }

@@ -1,4 +1,5 @@
-"""The five bandit arms. Every model maps a window (batch, L, F) to one number: the predicted
+"""The bandit arms. Default five: RNN, LSTM, GRU, TCN and TimesFM (see foundation.py; pretrained,
+zero-shot). PatchTST stays available as an optional sixth arm. Every trained model maps a window (batch, L, F) to one number: the predicted
 standardised next-bar log return. For a fair comparison they share the project plan's budget:
 2 hidden layers, 64 units, dropout 0.1.
 
@@ -8,7 +9,9 @@ standardised next-bar log return. For a fair comparison they share the project p
     tcn       Temporal Convolutional Network, Bai, Kolter & Koltun (2018),
               open source: github.com/locuslab/TCN
     patchtst  PatchTST, Nie et al. (ICLR 2023), "A Time Series is Worth 64 Words",
-              open source: github.com/yuqinie98/PatchTST
+              open source: github.com/yuqinie98/PatchTST  (optional arm)
+    timesfm   TimesFM, Das et al. (ICML 2024), pretrained foundation model used zero-shot,
+              open source: github.com/google-research/timesfm  (see foundation.py)
 
 TCN and PatchTST are compact re-implementations that follow the reference code (causal dilated
 residual blocks with weight norm; channel-independent patching + Transformer encoder + flatten
@@ -28,8 +31,12 @@ MODEL_INFO = {
             "source": "Bai, Kolter & Koltun (2018), github.com/locuslab/TCN"},
     "patchtst": {"label": "PatchTST", "family": "Transformer (open source)",
                  "source": "Nie et al. (ICLR 2023), github.com/yuqinie98/PatchTST"},
+    "timesfm": {"label": "TimesFM", "family": "Pretrained foundation model (open source, zero-shot)",
+                "source": "Das et al. (ICML 2024), github.com/google-research/timesfm", "pretrained": True},
 }
 MODEL_IDS = list(MODEL_INFO)
+DEFAULT_MODELS = ["rnn", "lstm", "gru", "tcn", "timesfm"]
+TRAINABLE = [m for m in MODEL_IDS if not MODEL_INFO[m].get("pretrained")]
 
 
 class _Recurrent(nn.Module):
@@ -142,7 +149,7 @@ _CLASSES = {"rnn": RNNNet, "lstm": LSTMNet, "gru": GRUNet, "tcn": TCNNet, "patch
 def build_model(model_id: str, n_features: int, lookback: int, hidden: int = 64, layers: int = 2,
                 dropout: float = 0.1) -> nn.Module:
     if model_id not in _CLASSES:
-        raise ValueError(f"Unknown model '{model_id}'. Choose from {MODEL_IDS}")
+        raise ValueError(f"'{model_id}' is not a trainable model. Choose from {TRAINABLE}")
     return _CLASSES[model_id](n_features, hidden=hidden, layers=layers, dropout=dropout, lookback=lookback)
 
 
