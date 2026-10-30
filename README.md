@@ -197,6 +197,8 @@ weights are Apache-2.0; 3.0 weights are licensed for non-commercial use only, wh
    (for TimesFM, it re-scores its single forecast on a new window).
    **Reward** = 0.5·Sharpe + 0.3·directional accuracy + 0.2·drawdown, each mapped to [0, 1]. Sharpe and drawdown are scored
    relative to equal-weight quarterly on the *same* window, so every arm faces the same market and window noise cancels out.
+   Directional accuracy is scored relative to always predicting "up" on that window, so riding a rising market earns
+   no credit (`accuracy_reference="none"` restores the raw hit rate used in the first version).
 5. **Evaluation** (`experiment.py`): (a) live bandit run → its pick; (b) every model × every seed × every window → the true best arm;
    (c) each algorithm replayed 300× on that reward table → P(correct pick) and simple regret vs pulls, compared with uniform testing;
    (d) per-model forecast metrics (directional accuracy, MAE, rank IC), portfolio metrics, Diebold-Mariano tests,

@@ -57,13 +57,16 @@ def sharpe_and_mdd(log_ret: np.ndarray, ppy: int, rf: float) -> tuple[float, flo
 
 
 def window_reward(log_ret: np.ndarray, hits: np.ndarray, ppy: int, rf: float, weights: dict,
-                  ref: tuple[float, float] | None = None) -> tuple[float, dict]:
+                  ref: tuple[float, float] | None = None, ref_acc: float | None = None) -> tuple[float, dict]:
     """Composite bandit reward in [0, 1] for one evaluation window, from the plan's three metrics:
     Sharpe (risk-adjusted return), directional accuracy and maximum drawdown.
 
     With `ref` = (Sharpe, max drawdown) of a reference strategy on the *same* window, Sharpe and
     drawdown are scored relative to it. Every arm then faces the same market conditions (common
-    random numbers), which strips most of the window-to-window noise out of the reward."""
+    random numbers), which strips most of the window-to-window noise out of the reward.
+
+    With `ref_acc` = hit rate of always predicting "up" on the same window, accuracy is scored
+    relative to it: in a rising market, always saying "up" scores well without any skill."""
     sharpe, mdd = sharpe_and_mdd(log_ret, ppy, rf)
     acc = float(hits.mean())
     if ref is None:
@@ -71,7 +74,8 @@ def window_reward(log_ret: np.ndarray, hits: np.ndarray, ppy: int, rf: float, we
     else:
         s_part = 0.5 + (sharpe - ref[0]) / 2.0                      # Sharpe gap -1..+1 -> 0..1
         d_part = 0.5 + (ref[1] - mdd) / 0.20                        # drawdown gap +-10 pts -> 0..1
-    parts = {"sharpe": np.clip(s_part, 0, 1), "accuracy": np.clip((acc - 0.40) / 0.20, 0, 1),
+    a_part = (acc - 0.40) / 0.20 if ref_acc is None else 0.5 + (acc - ref_acc) / 0.20   # +-10 pts -> 0..1
+    parts = {"sharpe": np.clip(s_part, 0, 1), "accuracy": np.clip(a_part, 0, 1),
              "drawdown": np.clip(d_part, 0, 1)}
     tot = sum(weights.values())
     reward = float(sum(weights[k] * parts[k] for k in weights) / tot)

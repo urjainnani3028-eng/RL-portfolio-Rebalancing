@@ -136,3 +136,14 @@ def test_timesfm_wrapper_uses_only_past_data(bundle):
     expected = bundle.z[t - delay, :] + (1.0 if delay == 1 else 0.0)
     assert np.allclose(out["pred"][t], expected)
     assert np.isnan(out["pred"][~d.valid]).all()
+
+
+def test_always_up_gets_no_accuracy_credit():
+    """A model whose hits equal the always-up hit rate scores neutral (0.5) on accuracy, however
+    high that hit rate is; beating it scores higher."""
+    lr = np.random.default_rng(1).normal(0.002, 0.02, 26)
+    ref = sharpe_and_mdd(lr, 52, 0.001)
+    w = {"accuracy": 1.0}
+    lazy, _ = window_reward(lr, np.full(26, 0.65), 52, 0.001, w, ref, ref_acc=0.65)
+    skilled, _ = window_reward(lr, np.full(26, 0.70), 52, 0.001, w, ref, ref_acc=0.65)
+    assert abs(lazy - 0.5) < 1e-9 and skilled > 0.7

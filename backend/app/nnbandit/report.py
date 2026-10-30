@@ -154,7 +154,9 @@ def write_report(res: dict, out: Path) -> Path:
           f"* Reward = {', '.join(f'{v:g}×{k}' for k, v in st['reward_weights'].items())} "
           "(each mapped to [0, 1]"
           + (f"; Sharpe and drawdown scored relative to `{st['reward_reference']}` on the same window)."
-             if st.get("reward_reference", "none") != "none" else ")."), "",
+             if st.get("reward_reference", "none") != "none" else ")."),
+          f"* Accuracy is scored {'against always predicting “up” on the same window' if st.get('accuracy_reference') == 'always_up' else 'as the raw hit rate'}.",
+          "",
           "| Model | Live pulls | Live mean reward | Trainings | True mean reward ± sd |", "|---|---|---|---|---|"]
     for m in models:
         L.append(f"| {lab[m]} | {live['pulls'][m]} | {_num(live['mean_reward'][m], 3)} | {live['trainings'][m]} | "

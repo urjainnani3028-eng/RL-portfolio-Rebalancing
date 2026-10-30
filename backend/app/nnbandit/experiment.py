@@ -56,6 +56,9 @@ class BanditSettings(BaseModel):
     reward_weights: dict[str, float] = Field(
         default_factory=lambda: {"sharpe": 0.5, "accuracy": 0.3, "drawdown": 0.2})
     reward_reference: Literal["ew_quarterly", "none"] = "ew_quarterly"   # score Sharpe / drawdown vs this
+    # score directional accuracy vs a forecaster that always says "up" on the same window, so a model
+    # gets no credit for simply riding a rising market ("none" = raw hit rate, the original reward)
+    accuracy_reference: Literal["always_up", "none"] = "always_up"
     replay_runs: int = 300
     compare_algorithms: list[str] = Field(default_factory=lambda: list(ALGORITHMS))
     # network / training (the project plan: 2 layers x 64 units, dropout 0.1, L2, early stopping)
@@ -109,8 +112,9 @@ class Record:
     def reward(self, start: int) -> tuple[float, dict]:
         w = self.ctx.cfg.window
         ref = self.ctx.ref_windows[start] if self.ctx.ref_windows is not None else None
+        ref_acc = self.ctx.up_hits[start:start + w].mean() if self.ctx.up_hits is not None else None
         return window_reward(self.log_ret[start:start + w], self.hits[start:start + w], self.ctx.b.ppy,
-                             self.ctx.b.rf_per_bar, self.ctx.cfg.reward_weights, ref)
+                             self.ctx.b.rf_per_bar, self.ctx.cfg.reward_weights, ref, ref_acc)
 
     @property
     def n_windows(self) -> int:
@@ -131,6 +135,10 @@ class Context:
             ref_lr = np.asarray(run_specs(b, cost, "val", spec)[cfg.reward_reference]["history"]["log_ret"])
             self.ref_windows = [sharpe_and_mdd(ref_lr[i:i + cfg.window], b.ppy, b.rf_per_bar)
                                 for i in range(len(ref_lr) - cfg.window + 1)]
+        self.up_hits = None
+        if cfg.accuracy_reference == "always_up":
+            ts = self.data.decisions(*b.segment("val"))
+            self.up_hits = (self.data.ret[ts] > 0).mean(1)      # hit rate of "always up", per decision
 
     @staticmethod
     def seeds_for(model_id: str, n: int) -> list[int]:
