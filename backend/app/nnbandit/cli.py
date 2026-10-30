@@ -25,6 +25,11 @@ from .models import DEFAULT_MODELS, MODEL_IDS
 from .report import write_report
 
 
+def cfg_min_train(s: Settings) -> int:
+    """Training weeks needed: the 52-week inner validation slice + 4-week embargo + at least ~2 years to fit."""
+    return 52 + 4 + 104
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="RNN / LSTM / GRU / TCN / TimesFM selection with a multi-armed bandit")
     ap.add_argument("--algorithm", default="successive_halving", choices=list(ALGORITHMS))
@@ -39,6 +44,8 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--source", default="auto", choices=["auto", "yahoo", "synthetic"])
     ap.add_argument("--refresh", action="store_true", help="re-download prices from Yahoo")
+    ap.add_argument("--tickers", nargs="+", default=None,
+                    help="ETF universe (default: the 7 in app/config.py), e.g. to drop a late-listed ETF")
     ap.add_argument("--test", action="store_true", help="unlock the test block (one-shot)")
     ap.add_argument("--quick", action="store_true", help="smoke run: 3 seeds, 15 epochs, budget 15")
     ap.add_argument("--out", default="storage/nnbandit/report")
@@ -48,11 +55,25 @@ def main(argv=None):
     logging.basicConfig(level=logging.WARNING)
     s = Settings()
     s.data.source = a.source
+    if a.tickers:
+        s.data.tickers = [t if t.endswith(".NS") else t + ".NS" for t in a.tickers]
     ds = prepare_dataset(s.data, s.portfolio.rf_annual, refresh=a.refresh)
     print(f"Dataset {ds.id}: {ds.meta['source']}, {ds.meta['start']} .. {ds.meta['end']}, {ds.meta['bars']} bars")
     for w in ds.meta.get("warnings", []):
         print("  !", w)
+    first = ds.meta.get("first_dates", {})
+    if ds.meta["source"] != "synthetic":
+        print("  First price per ETF: " + ", ".join(f"{k.replace('.NS', '')} {v}" for k, v in first.items()))
     b = make_bundle(ds, s.portfolio)
+    n_train = b.segments["train"][1] - b.warmup
+    if n_train < cfg_min_train(s):
+        late = max(first, key=first.get) if first else None
+        raise SystemExit(
+            f"\nOnly {max(n_train, 0)} training weeks: the dataset starts {ds.meta['start']}, because every ETF must have "
+            f"prices on every date"
+            + (f" and {late.replace('.NS', '')} only starts {first[late]}" if late else "") + ".\n"
+            "Drop the late ETF with --tickers, e.g.:\n  ../.venv/bin/python -m app.nnbandit.cli --quick --tickers "
+            + " ".join(t.replace(".NS", "") for t in s.data.tickers if t != late) + "\n")
     cfg = BanditSettings(models=a.models, algorithm=a.algorithm, budget=a.budget, max_seeds=a.max_seeds,
                          window=a.window, replay_runs=a.replay_runs, max_epochs=a.epochs, seed=a.seed,
                          timesfm_version=a.timesfm_version, timesfm_checkpoint=a.timesfm_checkpoint,
