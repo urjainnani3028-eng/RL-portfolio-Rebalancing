@@ -105,7 +105,7 @@ export default function App() {
           <div className="team">
             <span>Surbhi Agarwal · J002</span>
             <span>Urja Innani · J018</span>
-            <span>Taha Lokhandwala · J024</span>
+            <span>Muskaan · J059</span>
           </div>
         </div>
       </aside>

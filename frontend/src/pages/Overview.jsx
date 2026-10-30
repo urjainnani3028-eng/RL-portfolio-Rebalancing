@@ -2,7 +2,7 @@ import { ArrowRight, Check, Target, Trophy, Database, Layers, X } from 'lucide-r
 import { num } from '../api'
 import { Badge, Button, Card, Stat } from '../components/ui'
 
-const TEAM = [['SA', 'Surbhi Agarwal', 'J002'], ['UI', 'Urja Innani', 'J018'], ['TL', 'Taha Lokhandwala', 'J024']]
+const TEAM = [['SA', 'Surbhi Agarwal', 'J002'], ['UI', 'Urja Innani', 'J018'], ['M', 'Muskaan', 'J059']]
 
 const FLOW = [
   ['Observe', 'Price window, previous weights w(t−1), risk block — data up to t−1 only.'],

@@ -1,6 +1,6 @@
 # RL Rebalancing Lab — Reinforcement Learning for Portfolio Rebalancing
 
-**Team:** Surbhi Agarwal (J002) · Urja Innani (J018) · Taha Lokhandwala (J024)
+**Team:** Surbhi Agarwal (J002) · Urja Innani (J018) · Muskaan (J059)
 
 A full-stack research app that models a portfolio manager as an RL agent over **Indian ETFs (NSE)**.
 The agent's action sets the next period's weights; its reward is **log return net of transaction costs
