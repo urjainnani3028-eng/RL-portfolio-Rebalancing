@@ -48,7 +48,7 @@ BASELINE_IDS = ("market", "ew_monthly", "ew_quarterly", "min_variance_monthly", 
 class BanditSettings(BaseModel):
     models: list[str] = Field(default_factory=lambda: list(MODEL_IDS))
     algorithm: Literal["uniform", "epsilon_greedy", "ucb1", "ucb1_tuned", "thompson", "successive_halving"] = \
-        "thompson"
+        "successive_halving"   # pure best-arm identification: the goal here is to pick a model
     budget: int = 40                   # pulls the live bandit may spend
     max_seeds: int = 8                 # distinct trained seeds per model (also the ground-truth pool)
     window: int = 26                   # bars per validation evaluation window

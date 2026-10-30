@@ -26,7 +26,7 @@ from .report import write_report
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="RNN / LSTM / GRU / TCN / PatchTST selection with a multi-armed bandit")
-    ap.add_argument("--algorithm", default="thompson", choices=list(ALGORITHMS))
+    ap.add_argument("--algorithm", default="successive_halving", choices=list(ALGORITHMS))
     ap.add_argument("--models", nargs="+", default=MODEL_IDS, choices=MODEL_IDS)
     ap.add_argument("--budget", type=int, default=40)
     ap.add_argument("--max-seeds", type=int, default=8)
