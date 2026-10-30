@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Activity, BarChart3, Brain, Database, FlaskConical, Gauge, LayoutDashboard, LineChart, Moon, ShieldCheck, Sun,
+  Activity, BarChart3, Brain, Database, Dices, FlaskConical, Gauge, LayoutDashboard, LineChart, Moon, ShieldCheck, Sun,
 } from 'lucide-react'
 import { api } from './api'
 import { Badge, Toasts } from './components/ui'
@@ -11,6 +11,7 @@ import Sanity from './pages/Sanity'
 import Train from './pages/Train'
 import Results from './pages/Results'
 import Robustness from './pages/Robustness'
+import Bandit from './pages/Bandit'
 
 const NAV = [
   { sec: 'Project' },
@@ -23,6 +24,8 @@ const NAV = [
   { sec: 'Evaluation' },
   { id: 'results', label: 'Results', icon: LineChart, step: '5' },
   { id: 'robustness', label: 'Robustness', icon: Gauge, step: '6' },
+  { sec: 'Neural networks' },
+  { id: 'bandit', label: 'Model bandit', icon: Dices, step: '7' },
 ]
 
 function parseHash() {
@@ -141,6 +144,7 @@ export default function App() {
           {meta && route.page === 'train' && <Train {...props} />}
           {meta && route.page === 'results' && <Results {...props} />}
           {meta && route.page === 'robustness' && <Robustness {...props} />}
+          {meta && route.page === 'bandit' && <Bandit {...props} />}
         </main>
       </div>
       <Toasts />

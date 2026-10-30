@@ -125,6 +125,7 @@ backend/
   app/analysis.py    cost sweep, regimes, risk-return scatter
   app/jobs.py        background job queue with live progress
   app/main.py        FastAPI REST API (+ serves the built frontend)
+  app/nnbandit/      RNN/LSTM/GRU/TCN/PatchTST forecasters, bandit algorithms, study runner, CLI, report
   tests/             pytest: sanity tests, cap projection, cost asymmetry, no-look-ahead
   storage/           (created at runtime) datasets, caches, runs, models
 frontend/            React + Vite + Recharts dashboard
@@ -142,7 +143,62 @@ REST API docs are served at **http://localhost:8000/docs**.
 * **Slow training**: SAC/TD3 are ~5× slower per step than PPO. Start with PPO and the Quick demo preset.
 * **Port in use**: change `--port 8000` in `run.sh`/`run.bat` (and the proxy target in `frontend/vite.config.js` for dev mode).
 
-## 9. Key references
+## 9. NNDL module: five neural forecasters + a multi-armed bandit (`backend/app/nnbandit/`)
+
+**Question:** which of five sequence models best forecasts next-week ETF returns for rebalancing, and can a
+multi-armed bandit find it without spending equal compute on every model?
+
+### Run it
+```bash
+cd backend
+../.venv/bin/python -m app.nnbandit.cli                 # full study, test block stays locked (~15-25 min on CPU)
+../.venv/bin/python -m app.nnbandit.cli --quick         # smoke run (~3 min)
+../.venv/bin/python -m app.nnbandit.cli --test          # + one-shot evaluation on 2022-present
+../.venv/bin/python -m app.nnbandit.cli --algorithm ucb1_tuned --budget 60 --max-seeds 10
+```
+It writes `storage/nnbandit/report/report.md` plus PNG charts, and saves JSON results in `storage/nnbandit/results/`.
+Trained models are cached, so re-runs and other bandit algorithms reuse them. In the web app, the same study runs from
+**Model bandit** (step 7).
+
+### The five arms (same budget: 2 hidden layers × 64 units, dropout 0.1, Adam + L2 weight decay, early stopping)
+| Arm | Architecture | Source |
+|---|---|---|
+| `rnn` | Elman RNN (tanh) | `torch.nn.RNN` |
+| `lstm` | LSTM: input/forget/output gates + cell state | `torch.nn.LSTM` |
+| `gru` | GRU: update/reset gates | `torch.nn.GRU` |
+| `tcn` | Temporal Convolutional Network: causal dilated residual convolutions | open source: Bai et al. 2018, [locuslab/TCN](https://github.com/locuslab/TCN) |
+| `patchtst` | PatchTST: patching + channel-independent Transformer encoder | open source: Nie et al. ICLR 2023, [yuqinie98/PatchTST](https://github.com/yuqinie98/PatchTST) |
+
+### Pipeline
+1. **Features** (`features.py`): for each ETF and decision week *t*, a 20-week window ending at *t−1* holds the standardised return,
+   26-week volatility, average correlation, cross-sectional mean return and a one-hot asset id. The target is the standardised
+   return of week *t+1*. Scalers are fit on train only, and a unit test checks that no future bar enters a window.
+2. **Training** (`training.py`): Huber loss, gradient clipping, early stopping on an *inner* validation slice (the last 52 weeks of
+   train, after a 4-week embargo), so the outer validation block stays clean for the bandit.
+3. **Portfolio** (`portfolio.py`): one rule for every model, `w = softmax(5 · forecast)`, capped at 40% per ETF, with trades skipped
+   below a 2% drift. It runs through the same simulator and Indian cost model as the RL agent and the baselines.
+4. **Bandit** (`bandit.py`): uniform, ε-greedy, UCB1, UCB1-Tuned, Thompson sampling (Normal-Gamma), and successive halving.
+   A *pull* trains the next seed of the chosen model (cached) and scores it on a random 26-week validation window.
+   **Reward** = 0.5·Sharpe + 0.3·directional accuracy + 0.2·drawdown, each mapped to [0, 1]. Sharpe and drawdown are scored
+   relative to equal-weight quarterly on the *same* window, so every arm faces the same market and window noise cancels out.
+5. **Evaluation** (`experiment.py`): (a) live bandit run → its pick; (b) every model × every seed × every window → the true best arm;
+   (c) each algorithm replayed 300× on that reward table → P(correct pick) and simple regret vs pulls, compared with uniform testing;
+   (d) per-model forecast metrics (directional accuracy, MAE, rank IC), portfolio metrics, Diebold-Mariano tests,
+   learning curves, gradient-by-lag "memory" profile, and regime slices; (e) `--test`: the locked 2022+ block, one-shot.
+
+### Reading the result
+* **Which model is better** = the highest true mean reward on validation, confirmed on the test block. The DM test tells you whether its
+  forecast-error advantage is statistically real, and the seed IQR tells you whether it is robust to initialisation.
+* **Why** comes from the diagnostics in the report. The lag-saliency chart shows how far back each model actually looks (a vanilla RNN's
+  gradient decays with lag; LSTM/GRU gating and TCN dilations keep older weeks in play). Turnover shows how stable each model's
+  forecasts are, which matters because costs are charged weekly. Train-time and parameter counts give the compute side.
+* With ~400 weekly training samples per ETF the signal is weak. Expect directional accuracy near 50-55% and best epochs early. A
+  model that "wins" by a tiny gap is not meaningfully better, and the report prints the gap and the DM p-values so you can say so.
+
+## 10. Key references
 Markowitz (1952) · Jiang, Xu & Liang (2017) EIIE, arXiv:1706.10059 · Lim, Cao & Quek (2022), NCAA 34 ·
 Wang & Zhou (2020), Math. Finance · Wang et al. (2021) DeepTrader, AAAI · López de Prado (2016) HRP ·
-Bailey & López de Prado, The Deflated Sharpe Ratio · Sun et al. (2021) survey, arXiv:2109.13851.
+Bailey & López de Prado, The Deflated Sharpe Ratio · Sun et al. (2021) survey, arXiv:2109.13851 ·
+Hochreiter & Schmidhuber (1997) LSTM · Cho et al. (2014) GRU · Bai, Kolter & Koltun (2018) TCN, arXiv:1803.01271 ·
+Nie et al. (2023) PatchTST, ICLR · Auer et al. (2002) UCB1, Mach. Learn. 47 · Agrawal & Goyal (2012) Thompson sampling ·
+Karnin, Koren & Somekh (2013) successive halving, ICML · Diebold & Mariano (1995) forecast-accuracy test.

@@ -20,6 +20,10 @@ from .costs import CostModel
 from .data import asset_info, dataset_from_csv, split_indices
 from .jobs import Job, manager
 from .metrics import drawdown_series
+from .nnbandit import experiment as nn_experiment
+from .nnbandit.bandit import ALGORITHMS
+from .nnbandit.experiment import BanditSettings
+from .nnbandit.models import MODEL_INFO
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -242,6 +246,43 @@ def train(agent: AgentSettings):
     title = ("Walk-forward · " if agent.walk_forward else "") + (agent.name or runs._default_name(agent))
     j = manager.submit(Job(kind, title, fn, params={"agent": agent.model_dump()}))
     return j.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Neural forecasters + multi-armed bandit model selection
+# ---------------------------------------------------------------------------
+@app.get("/api/bandit/meta")
+def bandit_meta():
+    return {"models": MODEL_INFO, "algorithms": list(ALGORITHMS), "defaults": BanditSettings().model_dump()}
+
+
+@app.post("/api/bandit")
+def bandit_run(cfg: BanditSettings):
+    ds = _require_ds()
+    s = state.load_settings()
+    cfg.budget = int(max(len(cfg.models), min(cfg.budget, 400)))
+    cfg.max_seeds = int(max(1, min(cfg.max_seeds, 30)))
+    b = state.get_bundle(ds, s.portfolio)
+
+    def fn(job: Job):
+        return nn_experiment.run_study(b, s.costs, cfg, ds.meta, progress=lambda p, m: job.update(p, m),
+                                       stop=lambda: job.cancel_requested, log=job.log)["id"]
+
+    title = f"Model bandit · {cfg.algorithm} · {len(cfg.models)} models" + (" · TEST" if cfg.evaluate_test else "")
+    return manager.submit(Job("bandit", title, fn, params={"bandit": cfg.model_dump()})).to_dict()
+
+
+@app.get("/api/bandit/results")
+def bandit_results():
+    return nn_experiment.list_results()
+
+
+@app.get("/api/bandit/results/{result_id}")
+def bandit_result(result_id: str):
+    r = nn_experiment.load_result(result_id)
+    if r is None:
+        raise HTTPException(404, "No bandit study found. Run one first.")
+    return r
 
 
 @app.get("/api/jobs")
